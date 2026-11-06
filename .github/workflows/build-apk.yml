@@ -1,0 +1,85 @@
+name: Crea APK Android
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Installa dipendenze
+        run: npm install --legacy-peer-deps
+
+      - name: Classifiche Google Play Giochi solo se configurate
+        run: |
+          ID=$(node -p "require('./native-config.json').playGamesAppId || ''")
+          if [ -z "$ID" ]; then
+            echo "Play Giochi non ancora configurato: tolgo il componente delle classifiche da questa build"
+            npm uninstall @openforge/capacitor-game-connect --legacy-peer-deps
+          fi
+
+      - name: Prepara il gioco (font offline)
+        run: npm run prepare-web
+
+      - name: Crea il progetto Android
+        run: npx cap add android
+
+      - name: Icona e schermata di avvio
+        continue-on-error: true
+        run: npx capacitor-assets generate --android --iconBackgroundColor '#c4dbb9' --splashBackgroundColor '#c6ddef'
+
+      - name: Impostazioni Android (verticale, vibrazione, Play Giochi)
+        run: |
+          M=android/app/src/main/AndroidManifest.xml
+          sed -i 's/<activity /<activity android:screenOrientation="portrait" /' $M
+          grep -q 'android.permission.VIBRATE' $M || sed -i 's#</manifest>#    <uses-permission android:name="android.permission.VIBRATE" />\n</manifest>#' $M
+          ID=$(node -p "require('./native-config.json').playGamesAppId || ''")
+          if [ -n "$ID" ]; then
+            sed -i "s#</resources>#    <string translatable=\"false\" name=\"game_services_project_id\">$ID</string>\n</resources>#" android/app/src/main/res/values/strings.xml
+            sed -i 's#</application>#    <meta-data android:name="com.google.android.gms.games.APP_ID" android:value="@string/game_services_project_id" />\n    </application>#' $M
+          fi
+          grep -n "screenOrientation\|VIBRATE\|games.APP_ID" $M || true
+
+      - name: Sincronizza
+        run: npx cap sync android
+
+      - name: Firma sempre uguale (cosi' gli aggiornamenti si installano sopra)
+        run: |
+          mkdir -p ~/.android
+          cp keystore/debug.keystore ~/.android/debug.keystore
+
+      - name: Compila APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk ../MucchioDiGatti.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MucchioDiGatti-apk
+          path: MucchioDiGatti.apk
+
+      - name: Pubblica come release (link diretto per il telefono)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Mucchio di Gatti (build ${{ github.run_number }})
+          body: Scarica MucchioDiGatti.apk dal telefono e installalo.
+          files: MucchioDiGatti.apk
