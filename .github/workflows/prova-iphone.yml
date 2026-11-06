@@ -1,0 +1,45 @@
+name: Prova build iPhone
+
+# Avvio manuale (Actions > Prova build iPhone > Run workflow).
+# Compila l'app iPhone per il simulatore, senza account Apple: serve a verificare che il progetto iOS funzioni.
+on:
+  workflow_dispatch:
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Installa dipendenze
+        run: npm install --legacy-peer-deps
+
+      - name: Prepara il gioco (font offline)
+        run: npm run prepare-web
+
+      - name: Crea il progetto iPhone
+        run: npx cap add ios
+
+      - name: Icona e schermata di avvio
+        continue-on-error: true
+        run: npx capacitor-assets generate --ios --iconBackgroundColor '#c4dbb9' --splashBackgroundColor '#cfdccb'
+
+      - name: Solo verticale
+        run: |
+          P=ios/App/App/Info.plist
+          /usr/libexec/PlistBuddy -c "Delete :UISupportedInterfaceOrientations" $P || true
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations array" $P
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:0 string UIInterfaceOrientationPortrait" $P
+
+      - name: Sincronizza
+        run: npx cap sync ios
+
+      - name: Compila per il simulatore
+        working-directory: ios/App
+        run: |
+          if [ -f App.xcworkspace/contents.xcworkspacedata ]; then T="-workspace App.xcworkspace"; else T="-project App.xcodeproj"; fi
+          xcodebuild $T -scheme App -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build | tail -n 40
